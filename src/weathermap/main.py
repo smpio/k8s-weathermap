@@ -8,7 +8,6 @@ from kubernetes.client import rest
 
 from weathermap import models
 
-default_namespace = 'test'
 iperf_image = 'smpio/iperf:2'
 bottleneck_bandwidth = '250M'
 server_pod_name = 'iperf-server'
@@ -25,7 +24,7 @@ def main():
     models.db.connect()
     models.create_tables()
 
-    namespace = os.environ.get('NAMESPACE', default_namespace)
+    namespace = os.environ['NAMESPACE']
     api = Client(namespace)
     measurer = Measurer(api)
 
@@ -214,7 +213,7 @@ class Client:
             except rest.ApiException as e:
                 if e.status == 409:
                     log.debug('Pod %s already exists', pod_name)
-                    self.delete_pod(pod_name)
+                    self.delete_pod(pod_name, ignore_non_exists=True)
                     time.sleep(3)
                 else:
                     raise e
