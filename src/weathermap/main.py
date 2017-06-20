@@ -12,6 +12,9 @@ iperf_image = 'smpio/iperf:2'
 bottleneck_bandwidth = '250M'
 server_pod_name = 'iperf-server'
 client_pod_name = 'iperf-client'
+measurement_time_secs = 10
+approx_prepare_time_secs = 20
+complete_cluster_measurement_interval_sec = 24 * 60 * 60
 log = logging.getLogger(__name__)
 
 
@@ -152,6 +155,7 @@ class Measurer:
                         'args': ['--client', server_pod_ip,
                                  '--udp',
                                  '--bandwidth', bottleneck_bandwidth,
+                                 '--time', measurement_time_secs,
                                  '--reportstyle', 'C'],
                     },
                 ],
