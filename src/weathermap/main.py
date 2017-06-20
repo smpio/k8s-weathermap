@@ -5,6 +5,8 @@ import logging
 from kubernetes import client, config
 from kubernetes.client import rest
 
+from weathermap import models
+
 
 default_namespace = 'test'
 iperf_image = 'smpio/iperf:2'
@@ -15,7 +17,11 @@ log = logging.getLogger(__name__)
 
 
 def main():
-    logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.INFO)
+    logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.DEBUG)
+
+    models.db.connect()
+    models.create_tables()
+
     namespace = os.environ.get('NAMESPACE', default_namespace)
     api = Client(namespace)
     measurer = Measurer(api)
@@ -31,9 +37,16 @@ def main():
     upload_from = nodenames[3]
     download_to = nodenames[4]
 
-    print('Measuring speed: {} -> {}'.format(upload_from, download_to))
+    log.info('Measuring speed: %s -> %s', upload_from, download_to)
     bps = measurer.measure(upload_from, download_to)
-    print('{} Mbits'.format(bps / 1000000))
+    log.info('%s -> %s: %s Mbits', upload_from, download_to, bps / 1000000)
+
+    models.Measurement.create(
+        src_node=upload_from,
+        dest_node=download_to,
+        type=models.MeasurementType.UDP_SPEED,
+        value=bps,
+    )
 
 
 class Scheduler:
@@ -92,7 +105,7 @@ class Measurer:
         })
 
         server_pod_ip = self.api.get_pod_ip(server_pod_name)
-        log.info('Server pod IP: %s', server_pod_ip)
+        log.debug('Server pod IP: %s', server_pod_ip)
 
         self.api.create_pod({
             'apiVersion': 'v1',
@@ -145,23 +158,23 @@ class Client:
 
         while True:
             try:
-                log.info('Creating pod %s', pod_name)
+                log.debug('Creating pod %s', pod_name)
                 return self.v1.create_namespaced_pod(self.namespace, body)
             except rest.ApiException as e:
                 if e.status == 409:
-                    log.info('Pod %s already exists', pod_name)
+                    log.debug('Pod %s already exists', pod_name)
                     self.delete_pod(pod_name)
                     time.sleep(3)
                 else:
                     raise e
 
     def delete_pod(self, name, ignore_non_exists=False):
-        log.info('Deleting pod %s', name)
+        log.debug('Deleting pod %s', name)
         try:
             return self.v1.delete_namespaced_pod(name, self.namespace, {})
         except rest.ApiException as e:
             if e.status == 404 and ignore_non_exists:
-                log.info('Pod %s does not exist', name)
+                log.debug('Pod %s does not exist', name)
             else:
                 raise e
 
@@ -174,7 +187,7 @@ class Client:
             time.sleep(3)
 
     def wait_for_pod(self, name):
-        log.info('Waiting for pod %s', name)
+        log.debug('Waiting for pod %s', name)
         while True:
             pod = self.v1.read_namespaced_pod(name, self.namespace)
             if pod.status.phase in ('Succeeded', 'Failed'):
