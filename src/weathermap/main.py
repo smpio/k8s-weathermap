@@ -8,6 +8,7 @@ from kubernetes.client import rest
 
 default_namespace = 'test'
 iperf_image = 'smpio/iperf:2'
+bottleneck_bandwidth = '250M'
 server_pod_name = 'iperf-server'
 client_pod_name = 'iperf-client'
 log = logging.getLogger(__name__)
@@ -22,17 +23,17 @@ def main():
     nodenames = api.get_nodenames()
     log.info('Nodes: %s', nodenames)
 
-    scheduler = Scheduler(nodenames)
-    for _ in range(56):
-        from_no, to_no = scheduler.get_next_pair()
-        print('Measuring speed: {} -> {}'.format(from_no, to_no))
+    # scheduler = Scheduler(nodenames)
+    # for _ in range(56):
+    #     from_no, to_no = scheduler.get_next_pair()
+    #     print('Measuring speed: {} -> {}'.format(from_no, to_no))
 
-    # upload_from = nodenames[3]
-    # download_to = nodenames[4]
-    #
-    # print('Measuring speed: {} -> {}'.format(upload_from, download_to))
-    # bps = measurer.measure(upload_from, download_to)
-    # print('{} Mbits'.format(bps / 1000000))
+    upload_from = nodenames[3]
+    download_to = nodenames[4]
+
+    print('Measuring speed: {} -> {}'.format(upload_from, download_to))
+    bps = measurer.measure(upload_from, download_to)
+    print('{} Mbits'.format(bps / 1000000))
 
 
 class Scheduler:
@@ -82,7 +83,7 @@ class Measurer:
                     {
                         'name': 'main',
                         'image': iperf_image,
-                        'args': ['--server'],
+                        'args': ['--server', '--udp'],
                     },
                 ],
                 'restartPolicy': 'Never',
@@ -104,7 +105,10 @@ class Measurer:
                     {
                         'name': 'main',
                         'image': iperf_image,
-                        'args': ['--client', server_pod_ip, '--reportstyle', 'C'],
+                        'args': ['--client', server_pod_ip,
+                                 '--udp',
+                                 '--bandwidth', bottleneck_bandwidth,
+                                 '--reportstyle', 'C'],
                     },
                 ],
                 'restartPolicy': 'Never',
@@ -115,8 +119,11 @@ class Measurer:
         self.api.wait_for_pod(client_pod_name)
 
         iperf_log = self.api.get_pod_log(client_pod_name)
-        iperf_log = iperf_log.strip()
-        timestamp, source_address, source_port, destination_address, destination_port, unknown, interval, transferred_bytes, bits_per_second = iperf_log.split(',')
+        iperf_log = iperf_log.splitlines()
+        iperf_log = iperf_log[-1]
+        timestamp, source_address, source_port, destination_address, destination_port, \
+            transfer_id, interval, transferred_bytes, bits_per_second, jitter, \
+            lost_datagrams, total_datagrams, list_percent, out_of_order_datagrams = iperf_log.split(',')
 
         self.api.delete_pod(server_pod_name, ignore_non_exists=True)
         self.api.delete_pod(client_pod_name, ignore_non_exists=True)
