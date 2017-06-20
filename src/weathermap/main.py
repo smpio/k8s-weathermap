@@ -2,8 +2,9 @@ import time
 import random
 import logging
 
-from kubernetes import client, config
-from kubernetes.client import rest
+import kubernetes.config
+import kubernetes.client
+import kubernetes.client.rest
 
 from weathermap import models, config
 
@@ -62,8 +63,7 @@ class Scheduler:
             last_measurement = models.Measurement.select().order_by(models.Measurement.when.desc()) \
                 .where(models.Measurement.type == self.measurement_type).get()
 
-            prev1, prev2 = self.nodes.index(last_measurement.src_node), \
-                           self.nodes.index(last_measurement.dest_node)
+            prev1, prev2 = self.nodes.index(last_measurement.src_node), self.nodes.index(last_measurement.dest_node)
         except (ValueError, models.Measurement.DoesNotExist):
             ret = 0, 1
         else:
@@ -164,8 +164,8 @@ class Measurer:
         iperf_log = iperf_log.splitlines()
         iperf_log = iperf_log[-1]
         timestamp, source_address, source_port, destination_address, destination_port, \
-        transfer_id, interval, transferred_bytes, bits_per_second, jitter, \
-        lost_datagrams, total_datagrams, list_percent, out_of_order_datagrams = iperf_log.split(',')
+            transfer_id, interval, transferred_bytes, bits_per_second, jitter, \
+            lost_datagrams, total_datagrams, list_percent, out_of_order_datagrams = iperf_log.split(',')
 
         self.api.delete_pod(config.server_pod_name, ignore_non_exists=True)
         self.api.delete_pod(config.client_pod_name, ignore_non_exists=True)
@@ -188,8 +188,8 @@ class Measurer:
 class Client:
     def __init__(self, namespace):
         self.namespace = namespace
-        config.load_kube_config()
-        self.v1 = client.CoreV1Api()
+        kubernetes.config.load_kube_config()
+        self.v1 = kubernetes.client.CoreV1Api()
 
     def get_nodenames(self):
         return [i.metadata.name for i in self.v1.list_node().items]
@@ -201,7 +201,7 @@ class Client:
             try:
                 log.debug('Creating pod %s', pod_name)
                 return self.v1.create_namespaced_pod(self.namespace, body)
-            except rest.ApiException as e:
+            except kubernetes.client.rest.ApiException as e:
                 if e.status == 409:
                     log.debug('Pod %s already exists', pod_name)
                     self.delete_pod(pod_name, ignore_non_exists=True)
@@ -213,7 +213,7 @@ class Client:
         log.debug('Deleting pod %s', name)
         try:
             return self.v1.delete_namespaced_pod(name, self.namespace, {})
-        except rest.ApiException as e:
+        except kubernetes.client.rest.ApiException as e:
             if e.status == 404 and ignore_non_exists:
                 log.debug('Pod %s does not exist', name)
             else:
