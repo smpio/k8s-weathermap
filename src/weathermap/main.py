@@ -29,49 +29,33 @@ def main():
     api = Client(namespace)
     measurer = Measurer(api)
 
-    all_nodes = api.get_nodenames()
-    log.info('Current nodes: %s', all_nodes)
+    while True:
+        all_nodes = api.get_nodenames()
+        log.info('Current nodes: %s', all_nodes)
 
-    old_nodes = sorted(m.src_node for m in models.Measurement.select(models.Measurement.src_node).distinct())
-    log.info('Old nodes: %s', old_nodes)
+        old_nodes = sorted(m.src_node for m in models.Measurement.select(models.Measurement.src_node).distinct())
+        log.info('Old nodes: %s', old_nodes)
 
-    new_nodes = sorted(set(all_nodes) - set(old_nodes))
-    log.info('New nodes: %s', new_nodes)
+        new_nodes = sorted(set(all_nodes) - set(old_nodes))
+        log.info('New nodes: %s', new_nodes)
 
-    old_nodes = sorted(set(all_nodes) - set(new_nodes))
-    log.info('Old nodes (minus deleted): %s', old_nodes)
+        old_nodes = sorted(set(all_nodes) - set(new_nodes))
+        log.info('Old nodes (minus deleted): %s', old_nodes)
 
-    if new_nodes:
-        scheduler = Scheduler(new_nodes, models.MeasurementType.UDP_SPEED)
-        log.info('Performing %s measures for new nodes', scheduler.get_measurement_count())
-        for src_node, dest_node in Scheduler.get_pairs_for_new_nodes(new_nodes, old_nodes):
-            measurer.measure_and_save(src_node, dest_node)
+        if new_nodes:
+            log.info('Performing measures for new nodes')
+            for src_node, dest_node in Scheduler.get_pairs_for_new_nodes(new_nodes, old_nodes):
+                measurer.measure_and_save(src_node, dest_node)
 
-    # for _ in range(56):
-    #     src_node, dest_node = scheduler.get_next_pair()
-    #     print('{} -> {}'.format(src_node, dest_node))
-    #     models.Measurement.create(
-    #         src_node=src_node,
-    #         dest_node=dest_node,
-    #         type=models.MeasurementType.UDP_SPEED,
-    #         value=0,
-    #     )
+        scheduler = Scheduler(all_nodes, models.MeasurementType.UDP_SPEED)
+        src_node, dest_node = scheduler.get_next_pair()
+        measurer.measure_and_save(src_node, dest_node)
 
-    return
+        delay = complete_cluster_measurement_interval_sec / scheduler.get_complete_measurement_count()
+        delay = delay - measurement_time_secs - approx_prepare_time_secs
 
-    upload_from = all_nodes[3]
-    download_to = all_nodes[4]
-
-    log.info('Measuring speed: %s -> %s', upload_from, download_to)
-    bps = measurer.measure(upload_from, download_to)
-    log.info('%s -> %s: %s Mbits', upload_from, download_to, bps / 1000000)
-
-    models.Measurement.create(
-        src_node=upload_from,
-        dest_node=download_to,
-        type=models.MeasurementType.UDP_SPEED,
-        value=bps,
-    )
+        log.info('Sleeping for %s seconds', delay)
+        time.sleep(delay)
 
 
 class Scheduler:
@@ -100,12 +84,14 @@ class Scheduler:
             if next1 == self.count:
                 next1 = 0
                 shift += 1
+            if shift in (0, self.count):
+                shift = 1
             next2 = (next1 + shift) % self.count
             ret = next1, next2
 
         return self.nodes[ret[0]], self.nodes[ret[1]]
 
-    def get_measurement_count(self):
+    def get_complete_measurement_count(self):
         return self.count * (self.count - 1)
 
     @staticmethod
@@ -172,8 +158,8 @@ class Measurer:
                         'image': iperf_image,
                         'args': ['--client', server_pod_ip,
                                  '--udp',
-                                 '--bandwidth', bottleneck_bandwidth,
-                                 '--time', measurement_time_secs,
+                                 '--bandwidth', str(bottleneck_bandwidth),
+                                 '--time', str(measurement_time_secs),
                                  '--reportstyle', 'C'],
                     },
                 ],
