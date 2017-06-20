@@ -7,7 +7,6 @@ from kubernetes.client import rest
 
 from weathermap import models
 
-
 default_namespace = 'test'
 iperf_image = 'smpio/iperf:2'
 bottleneck_bandwidth = '250M'
@@ -17,7 +16,7 @@ log = logging.getLogger(__name__)
 
 
 def main():
-    logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.DEBUG)
+    logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.NOTSET)
 
     models.db.connect()
     models.create_tables()
@@ -27,12 +26,31 @@ def main():
     measurer = Measurer(api)
 
     nodenames = api.get_nodenames()
-    log.info('Nodes: %s', nodenames)
+    log.info('Cluster nodes: %s', nodenames)
 
-    # scheduler = Scheduler(nodenames)
+    known_nodenames = [m.src_node for m in models.Measurement.select(models.Measurement.src_node).distinct()]
+    log.info('Known nodes: %s', known_nodenames)
+
+    new_nodenames = sorted(set(nodenames) - set(known_nodenames))
+    log.info('New nodes: %s', new_nodenames)
+
+    if new_nodenames:
+        scheduler = Scheduler(new_nodenames, models.MeasurementType.UDP_SPEED)
+        log.info('Performing %s measures for new nodes', scheduler.get_measurement_count())
+        for src_node, dest_node in scheduler.get_initial_pairs():
+            measurer.measure_and_save(src_node, dest_node)
+
     # for _ in range(56):
-    #     from_no, to_no = scheduler.get_next_pair()
-    #     print('Measuring speed: {} -> {}'.format(from_no, to_no))
+    #     src_node, dest_node = scheduler.get_next_pair()
+    #     print('{} -> {}'.format(src_node, dest_node))
+    #     models.Measurement.create(
+    #         src_node=src_node,
+    #         dest_node=dest_node,
+    #         type=models.MeasurementType.UDP_SPEED,
+    #         value=0,
+    #     )
+
+    return
 
     upload_from = nodenames[3]
     download_to = nodenames[4]
@@ -50,19 +68,24 @@ def main():
 
 
 class Scheduler:
-    def __init__(self, nodenames):
-        self.db = []
+    def __init__(self, nodenames, measurement_type):
         self.nodenames = nodenames
+        self.measurement_type = measurement_type
 
     @property
     def count(self):
         return len(self.nodenames)
 
     def get_next_pair(self):
-        if not self.db:
+        try:
+            last_measurement = models.Measurement.select().order_by(models.Measurement.when.desc()) \
+                .where(models.Measurement.type == self.measurement_type).get()
+
+            prev1, prev2 = self.nodenames.index(last_measurement.src_node), \
+                           self.nodenames.index(last_measurement.dest_node)
+        except (ValueError, models.Measurement.DoesNotExist):
             ret = 0, 1
         else:
-            prev1, prev2 = self.db[-1]
             shift = prev2 - prev1
             if shift < 0:
                 shift += self.count
@@ -73,8 +96,16 @@ class Scheduler:
             next2 = (next1 + shift) % self.count
             ret = next1, next2
 
-        self.db.append(ret)
         return self.nodenames[ret[0]], self.nodenames[ret[1]]
+
+    def get_initial_pairs(self):
+        for shift in range(1, self.count):
+            for i1 in range(self.count):
+                i2 = (i1 + shift) % self.count
+                yield self.nodenames[i1], self.nodenames[i2]
+
+    def get_measurement_count(self):
+        return self.count * (self.count - 1)
 
 
 class Measurer:
@@ -135,13 +166,25 @@ class Measurer:
         iperf_log = iperf_log.splitlines()
         iperf_log = iperf_log[-1]
         timestamp, source_address, source_port, destination_address, destination_port, \
-            transfer_id, interval, transferred_bytes, bits_per_second, jitter, \
-            lost_datagrams, total_datagrams, list_percent, out_of_order_datagrams = iperf_log.split(',')
+        transfer_id, interval, transferred_bytes, bits_per_second, jitter, \
+        lost_datagrams, total_datagrams, list_percent, out_of_order_datagrams = iperf_log.split(',')
 
         self.api.delete_pod(server_pod_name, ignore_non_exists=True)
         self.api.delete_pod(client_pod_name, ignore_non_exists=True)
 
         return int(bits_per_second)
+
+    def measure_and_save(self, src_node, dest_node):
+        log.info('Measuring speed: %s -> %s', src_node, dest_node)
+        bps = self.measure(src_node, dest_node)
+        log.info('%s -> %s: %s Mbits', src_node, dest_node, bps / 1000000)
+
+        models.Measurement.create(
+            src_node=src_node,
+            dest_node=dest_node,
+            type=models.MeasurementType.UDP_SPEED,
+            value=bps,
+        )
 
 
 class Client:
