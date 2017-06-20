@@ -188,7 +188,12 @@ class Measurer:
 class Client:
     def __init__(self, namespace):
         self.namespace = namespace
-        kubernetes.config.load_kube_config()
+
+        if config.in_cluster:
+            kubernetes.config.load_incluster_config()
+        else:
+            kubernetes.config.load_kube_config()
+
         self.v1 = kubernetes.client.CoreV1Api()
 
     def get_nodenames(self):

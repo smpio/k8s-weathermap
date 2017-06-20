@@ -6,6 +6,8 @@ db_user = os.environ.get('DB_USER', 'postgres')
 db_password = os.environ.get('DB_PASSWORD', '')
 
 namespace = os.environ['NAMESPACE']
+in_cluster = os.environ.get('IN_CLUSTER', '1').lower() in ('1', 'true', 'yes')
+
 bottleneck_bandwidth = os.environ.get('BOTTLENECK_BANDWIDTH', '250M')
 
 iperf_image = 'smpio/iperf:2'
