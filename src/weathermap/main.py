@@ -1,4 +1,3 @@
-import os
 import time
 import random
 import logging
@@ -6,15 +5,8 @@ import logging
 from kubernetes import client, config
 from kubernetes.client import rest
 
-from weathermap import models
+from weathermap import models, config
 
-iperf_image = 'smpio/iperf:2'
-bottleneck_bandwidth = '250M'
-server_pod_name = 'iperf-server'
-client_pod_name = 'iperf-client'
-measurement_time_secs = 10
-approx_prepare_time_secs = 20
-complete_cluster_measurement_interval_sec = 24 * 60 * 60
 log = logging.getLogger(__name__)
 
 
@@ -24,8 +16,7 @@ def main():
     models.db.connect()
     models.create_tables()
 
-    namespace = os.environ['NAMESPACE']
-    api = Client(namespace)
+    api = Client(config.namespace)
     measurer = Measurer(api)
 
     while True:
@@ -50,8 +41,8 @@ def main():
         src_node, dest_node = scheduler.get_next_pair()
         measurer.measure_and_save(src_node, dest_node)
 
-        delay = complete_cluster_measurement_interval_sec / scheduler.get_complete_measurement_count()
-        delay = delay - measurement_time_secs - approx_prepare_time_secs
+        delay = config.complete_cluster_measurement_interval_sec / scheduler.get_complete_measurement_count()
+        delay = delay - config.measurement_time_secs - config.approx_prepare_time_secs
 
         log.info('Sleeping for %s seconds', delay)
         time.sleep(delay)
@@ -126,13 +117,13 @@ class Measurer:
             'apiVersion': 'v1',
             'kind': 'Pod',
             'metadata': {
-                'name': server_pod_name,
+                'name': config.server_pod_name,
             },
             'spec': {
                 'containers': [
                     {
                         'name': 'main',
-                        'image': iperf_image,
+                        'image': config.iperf_image,
                         'args': ['--server', '--udp'],
                     },
                 ],
@@ -141,24 +132,24 @@ class Measurer:
             },
         })
 
-        server_pod_ip = self.api.get_pod_ip(server_pod_name)
+        server_pod_ip = self.api.get_pod_ip(config.server_pod_name)
         log.debug('Server pod IP: %s', server_pod_ip)
 
         self.api.create_pod({
             'apiVersion': 'v1',
             'kind': 'Pod',
             'metadata': {
-                'name': client_pod_name,
+                'name': config.client_pod_name,
             },
             'spec': {
                 'containers': [
                     {
                         'name': 'main',
-                        'image': iperf_image,
+                        'image': config.iperf_image,
                         'args': ['--client', server_pod_ip,
                                  '--udp',
-                                 '--bandwidth', str(bottleneck_bandwidth),
-                                 '--time', str(measurement_time_secs),
+                                 '--bandwidth', str(config.bottleneck_bandwidth),
+                                 '--time', str(config.measurement_time_secs),
                                  '--reportstyle', 'C'],
                     },
                 ],
@@ -167,17 +158,17 @@ class Measurer:
             },
         })
 
-        self.api.wait_for_pod(client_pod_name)
+        self.api.wait_for_pod(config.client_pod_name)
 
-        iperf_log = self.api.get_pod_log(client_pod_name)
+        iperf_log = self.api.get_pod_log(config.client_pod_name)
         iperf_log = iperf_log.splitlines()
         iperf_log = iperf_log[-1]
         timestamp, source_address, source_port, destination_address, destination_port, \
         transfer_id, interval, transferred_bytes, bits_per_second, jitter, \
         lost_datagrams, total_datagrams, list_percent, out_of_order_datagrams = iperf_log.split(',')
 
-        self.api.delete_pod(server_pod_name, ignore_non_exists=True)
-        self.api.delete_pod(client_pod_name, ignore_non_exists=True)
+        self.api.delete_pod(config.server_pod_name, ignore_non_exists=True)
+        self.api.delete_pod(config.client_pod_name, ignore_non_exists=True)
 
         return int(bits_per_second)
 

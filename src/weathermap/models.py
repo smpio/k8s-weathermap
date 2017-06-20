@@ -3,8 +3,10 @@ import datetime
 
 import peewee
 
+from weathermap import config
 
-db = peewee.PostgresqlDatabase('postgres', user='postgres', host='localhost')
+
+db = peewee.PostgresqlDatabase(config.db_name, user=config.db_user, host=config.db_host, password=config.db_password)
 
 
 @enum.unique
