@@ -1,5 +1,6 @@
 import os
 import time
+import random
 import logging
 
 from kubernetes import client, config
@@ -28,19 +29,22 @@ def main():
     api = Client(namespace)
     measurer = Measurer(api)
 
-    nodenames = api.get_nodenames()
-    log.info('Cluster nodes: %s', nodenames)
+    all_nodes = api.get_nodenames()
+    log.info('Current nodes: %s', all_nodes)
 
-    known_nodenames = [m.src_node for m in models.Measurement.select(models.Measurement.src_node).distinct()]
-    log.info('Known nodes: %s', known_nodenames)
+    old_nodes = sorted(m.src_node for m in models.Measurement.select(models.Measurement.src_node).distinct())
+    log.info('Old nodes: %s', old_nodes)
 
-    new_nodenames = sorted(set(nodenames) - set(known_nodenames))
-    log.info('New nodes: %s', new_nodenames)
+    new_nodes = sorted(set(all_nodes) - set(old_nodes))
+    log.info('New nodes: %s', new_nodes)
 
-    if new_nodenames:
-        scheduler = Scheduler(new_nodenames, models.MeasurementType.UDP_SPEED)
+    old_nodes = sorted(set(all_nodes) - set(new_nodes))
+    log.info('Old nodes (minus deleted): %s', old_nodes)
+
+    if new_nodes:
+        scheduler = Scheduler(new_nodes, models.MeasurementType.UDP_SPEED)
         log.info('Performing %s measures for new nodes', scheduler.get_measurement_count())
-        for src_node, dest_node in scheduler.get_initial_pairs():
+        for src_node, dest_node in Scheduler.get_pairs_for_new_nodes(new_nodes, old_nodes):
             measurer.measure_and_save(src_node, dest_node)
 
     # for _ in range(56):
@@ -55,8 +59,8 @@ def main():
 
     return
 
-    upload_from = nodenames[3]
-    download_to = nodenames[4]
+    upload_from = all_nodes[3]
+    download_to = all_nodes[4]
 
     log.info('Measuring speed: %s -> %s', upload_from, download_to)
     bps = measurer.measure(upload_from, download_to)
@@ -71,21 +75,21 @@ def main():
 
 
 class Scheduler:
-    def __init__(self, nodenames, measurement_type):
-        self.nodenames = nodenames
+    def __init__(self, nodes, measurement_type):
+        self.nodes = nodes
         self.measurement_type = measurement_type
 
     @property
     def count(self):
-        return len(self.nodenames)
+        return len(self.nodes)
 
     def get_next_pair(self):
         try:
             last_measurement = models.Measurement.select().order_by(models.Measurement.when.desc()) \
                 .where(models.Measurement.type == self.measurement_type).get()
 
-            prev1, prev2 = self.nodenames.index(last_measurement.src_node), \
-                           self.nodenames.index(last_measurement.dest_node)
+            prev1, prev2 = self.nodes.index(last_measurement.src_node), \
+                           self.nodes.index(last_measurement.dest_node)
         except (ValueError, models.Measurement.DoesNotExist):
             ret = 0, 1
         else:
@@ -99,16 +103,30 @@ class Scheduler:
             next2 = (next1 + shift) % self.count
             ret = next1, next2
 
-        return self.nodenames[ret[0]], self.nodenames[ret[1]]
-
-    def get_initial_pairs(self):
-        for shift in range(1, self.count):
-            for i1 in range(self.count):
-                i2 = (i1 + shift) % self.count
-                yield self.nodenames[i1], self.nodenames[i2]
+        return self.nodes[ret[0]], self.nodes[ret[1]]
 
     def get_measurement_count(self):
         return self.count * (self.count - 1)
+
+    @staticmethod
+    def get_pairs_for_new_nodes(new_nodes, old_nodes):
+        pairs = []
+
+        for n1 in new_nodes:
+            for n2 in new_nodes:
+                if n1 != n2:
+                    pairs.append((n1, n2))
+
+        for n1 in new_nodes:
+            for n2 in old_nodes:
+                pairs.append((n1, n2))
+
+        for n1 in old_nodes:
+            for n2 in new_nodes:
+                pairs.append((n1, n2))
+
+        random.shuffle(pairs)
+        return pairs
 
 
 class Measurer:
